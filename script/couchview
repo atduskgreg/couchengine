@@ -1,0 +1,160 @@
+#!/usr/bin/env ruby
+
+commands = %w{pull push}
+
+command = ARGV[0]
+
+if !commands.include?(command)
+  puts <<-USAGE
+Usage: script/views (pull|push) my-database-name
+For help on pull and push run script/views (pull|push) without a database name.
+USAGE
+  exit
+end
+
+if ARGV.length == 1
+  case command
+  when "pull"
+    puts <<-PULL
+script/views pull my-database-name
+
+I will automagically create a "views" directory in your current working directory if none exists.
+Then I copy the design documents and views into a directory structure like:
+
+./views/my-design-doc/view-name-map.js
+./views/my-design-doc/view-name-reduce.js
+
+If your view names don't end in "map" or "reduce" I'll add those suffixes as a pull. On push I'll put them in new locations corresponding to these new names (overwriting the old design documents). I'm opinionated, but if these conventions don't work for you, the source code is right here.
+    
+    PULL
+  when "push"
+    puts <<-PUSH
+script/views push my-database-name
+
+I'll push all the files in your views directory to the specified database. Because CouchDB caches the results of view calculation by function content, there's no performance penalty for duplicating the map function twice, which I'll do if you have a reduce function. This makes it possible to browse the results of just the map, which can be useful for both queries and debugging.
+
+./views/my-design-doc/view-name-map.js
+./views/my-design-doc/view-name-reduce.js
+
+  Pushed to =>
+
+  http://localhost:5984/my-database-name/_design/my-design-doc
+    {
+      "views" : {
+        "view-name-map" : {
+          "map" : "### contents of view-name-map.js ###"
+        },
+        "view-name-reduce" : {
+          "map" : "### contents of view-name-map.js ###",
+          "reduce" : "### contents of view-name-reduce.js ###"
+        },
+      }
+    }
+PUSH
+  end
+  exit
+end
+
+dbname = ARGV[1]
+dirname = ARGV[2] || "views"
+
+puts "Running #{command} on #{dbname} from directory #{dirname}."
+
+require File.expand_path(File.dirname(__FILE__)) + '/../couchrest'
+require File.expand_path(File.dirname(__FILE__)) + '/../vendor/jsmin/lib/jsmin'
+require 'fileutils'
+
+module Enumerable
+  def group_by
+    inject({}) do |groups, element|
+      (groups[yield(element)] ||= []) << element
+      groups
+    end
+  end if RUBY_VERSION < '1.9'
+end
+
+# connect to couchdb
+cr = CouchRest.new("http://localhost:5984")
+db = cr.database(dbname)
+
+def readjs(file, libs=nil)
+  st = open(file).read
+  st.sub!(/\/\/include-lib/,libs) if libs
+  JSMin.minify(st)
+end
+
+case command
+when "push" # files to views
+  views = {}
+  viewfiles = Dir.glob(File.join(dirname,"**","*.js")) # todo support non-js views
+  puts viewfiles.inspect
+  libfiles = viewfiles.select{|f|/lib\.js/.match(f)}
+  libs = open(libfiles[0]).read if libfiles[0]
+  all = (viewfiles-libfiles).collect do |file|
+    fileparts = file.split('/')
+    filename = /(\w.*)-(\w.*)\.js/.match file.split('/').pop
+    design = fileparts[1]
+    view = filename[1]
+    func = filename[2]
+    path = file
+    [design,view,func,path]
+  end
+  designs = all.group_by{|f|f[0]}
+  designs.each do |design,parts|
+    # puts "replace _design/#{design}? (enter to proceed, 'n' to skip)"
+    # rep = $stdin.gets.chomp
+    # next if rep == 'n'
+    dviews = {}
+    parts.group_by{|p|p[1]}.each do |view,fs|
+      fs.each do |f|
+        dviews["#{view}-reduce"] ||= {}
+        dviews["#{view}-reduce"][f[2]] = readjs(f.last,libs)        
+      end
+      dviews["#{view}-map"] = {'map' => dviews["#{view}-reduce"]['map']}
+      dviews.delete("#{view}-reduce") unless dviews["#{view}-reduce"]["reduce"]
+    end
+    # save them to the db
+    view = db.get("_design/#{design}") rescue nil
+    if (view && view['views'] == dviews)
+      puts "no change to _design/#{design}. skipping..."
+    else
+      puts "replacing _design/#{design}"
+      db.delete(view) rescue nil
+      db.save({
+        "_id" => "_design/#{design}",
+        :views => dviews
+      })   
+    end
+  end
+  
+when "pull" # views to files
+  ds = db.documents(:startkey => '_design/', :endkey => '_design/ZZZZZZZZZ')
+  ds['rows'].collect{|r|r['id']}.each do |id|
+    puts directory = id.split('/').last
+    FileUtils.mkdir_p(File.join("views",directory))
+    views = db.get(id)['views']
+    
+    vgroups = views.keys.group_by{|k|k.sub(/\-(map|reduce)$/,'')}
+    vgroups.each do|g,vs|
+      mapname = vs.find {|v|views[v]["map"]}
+      if mapname
+        # save map
+        mapfunc = views[mapname]["map"]
+        mapfile = File.join(dirname,directory,"#{g}-map.js") # todo support non-js views
+        File.open(mapfile,'w') do |f|
+          f.write mapfunc
+        end
+      end
+      
+      reducename = vs.find {|v|views[v]["reduce"]}
+      if reducename
+        # save reduce
+        reducefunc = views[reducename]["reduce"]
+        reducefile = File.join(dirname,directory,"#{g}-reduce.js") # todo support non-js views
+        File.open(reducefile,'w') do |f|
+          f.write reducefunc
+        end
+      end
+    end
+  end  
+end
