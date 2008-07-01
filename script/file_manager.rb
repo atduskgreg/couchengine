@@ -6,14 +6,14 @@ require 'json'
 PROJECT_ROOT = "#{File.dirname(__FILE__)}/.."
 DBNAME = JSON.load( open("#{PROJECT_ROOT}/config.json").read )["db"]
 
-
 LANGS = {"rb" => "ruby", "js" => "javascript"}
-
 
 # parse the file structure to load the public files, controllers, and views into a hash with the right shape for coucdb
 couch = {}
 
-couch["public"] = Dir["#{File.expand_path(File.dirname("."))}/public/*.*"].collect{|f| {f.split("/").last => open(f).read}}
+couch["public"] = Dir["#{File.expand_path(File.dirname("."))}/public/**/*.*"].collect do |f|
+  {f.split("public/").last => open(f).read}
+end
 
 couch["controllers"] = {}
 Dir["#{File.expand_path(File.dirname("."))}/app/controllers/**/*.*"].collect do |c|
@@ -59,6 +59,10 @@ end
 couch["designs"].each do |name, props|
   props["views"].delete("#{name}-reduce") unless props["views"]["#{name}-reduce"].keys.include?("reduce")
 end
+
+# puts couch.to_yaml
+
+# parsing done, begin posting
 
 # connect to couchdb
 cr = CouchRest.new("http://localhost:5984")
@@ -123,3 +127,23 @@ end
 puts
 puts "posting public docs into CouchDB"
 puts
+
+
+
+@content_types = {
+  "html"       => "text/html",
+  "htm"        => "text/html",
+  "png"        => "image/png",
+  "css"        => "text/css",
+  "js"         => "test/javascript"
+}
+
+attachments = {}
+couch["public"].each do |doc|
+  attachments[doc.keys.first] = {
+    "data" => doc.values.first,
+    "content_type" => @content_types[doc.keys.first.split('.').last]
+  }
+end
+
+create_or_update("public", {"_attachments" => attachments})
