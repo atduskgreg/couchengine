@@ -2,6 +2,7 @@ require 'yaml'
 require 'rubygems'
 require 'couchrest'
 require 'json'
+require 'digest/md5'
 
 PROJECT_ROOT = "#{File.dirname(__FILE__)}/.."
 DBNAME = JSON.load( open("#{PROJECT_ROOT}/config.json").read )["db"]
@@ -60,7 +61,7 @@ couch["designs"].each do |name, props|
   props["views"].delete("#{name}-reduce") unless props["views"]["#{name}-reduce"].keys.include?("reduce")
 end
 
-# puts couch.to_yaml
+puts couch.to_yaml
 
 # parsing done, begin posting
 
@@ -73,6 +74,10 @@ def create_or_update(id, fields)
   
   if existing
     updated = fields.merge({"_id" => id, "_rev" => existing["_rev"]})
+    puts "----------"
+    puts existing.inspect
+    puts
+    puts updated.inspect
   else
     puts "saving #{id}"
     save(fields.merge({"_id" => id}))
@@ -138,12 +143,51 @@ puts
   "js"         => "test/javascript"
 }
 
-attachments = {}
+def md5 string
+  Digest::MD5.hexdigest(string)
+end
+
+@attachments = {}
+@signatures = {}
 couch["public"].each do |doc|
-  attachments[doc.keys.first] = {
+  @signatures[doc.keys.first] = md5(doc.values.first)
+  
+  @attachments[doc.keys.first] = {
     "data" => doc.values.first,
     "content_type" => @content_types[doc.keys.first.split('.').last]
   }
 end
 
-create_or_update("public", {"_attachments" => attachments})
+doc = get("public")
+unless doc
+  puts "creating public"
+  @db.save({"_id" => "public", "_attachments" => @attachments, "signatures" => @signatures})
+  exit
+end
+
+puts doc.inspect
+
+doc["signatures"].each do |path, sig|
+  puts "existing"
+  puts "#{path}: #{sig}"
+  puts "new"
+  puts "#{path}: #{@signatures[path]}"
+  puts
+  if @signatures[path] == sig
+    puts "no change to #{path}. skipping..."
+  else
+    puts "replacing #{path}"
+    doc["signatures"][path] = md5(@attachments[path]["data"])
+    doc["_attachments"][path].delete("stub")
+    doc["_attachments"][path].delete("length")    
+    doc["_attachments"][path]["data"] = @attachments[path]["data"]
+    doc["_attachments"][path].merge!({"data" => @attachments[path]["data"]} )
+    puts doc.inspect
+    begin
+      @db.save(doc)
+    rescue Exception => e
+      puts e.message
+    end
+  end
+end
+# create_or_update("public", {"_attachments" => attachments, "signatures" => signatures})
