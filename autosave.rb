@@ -1,6 +1,8 @@
 dirname = ARGV[0]
 dbname = ARGV[1]
 
+PROJECT_ROOT = "#{File.dirname(__FILE__)}/.." unless defined?(PROJECT_ROOT)
+
 begin
 
   require 'osx/foundation'

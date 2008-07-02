@@ -1,10 +1,12 @@
-require 'yaml'
 require 'rubygems'
 require 'couchrest'
 require 'json'
 require 'digest/md5'
 
-PROJECT_ROOT = "#{File.dirname(__FILE__)}/.."
+todo = ARGV
+todo = ["views", "public", "controllers"] if ARGV.include? "all"
+
+PROJECT_ROOT = "#{File.dirname(__FILE__)}/.." unless defined?(PROJECT_ROOT)
 DBNAME = JSON.load( open("#{PROJECT_ROOT}/config.json").read )["db"]
 
 LANGS = {"rb" => "ruby", "js" => "javascript"}
@@ -61,8 +63,6 @@ couch["designs"].each do |name, props|
   props["views"].delete("#{name}-reduce") unless props["views"]["#{name}-reduce"].keys.include?("reduce")
 end
 
-puts couch.to_yaml
-
 # parsing done, begin posting
 
 # connect to couchdb
@@ -74,10 +74,6 @@ def create_or_update(id, fields)
   
   if existing
     updated = fields.merge({"_id" => id, "_rev" => existing["_rev"]})
-    puts "----------"
-    puts existing.inspect
-    puts
-    puts updated.inspect
   else
     puts "saving #{id}"
     save(fields.merge({"_id" => id}))
@@ -108,86 +104,80 @@ def handle_errors(&block)
   begin
     yield
   rescue Exception => e
-    puts e.message
+    # puts e.message
     nil
   end
 end
 
-puts
-puts "posting views into CouchDB"
-puts
 
-couch["designs"].each do |k,v|
-  create_or_update("_design/#{k}", v)
-end
-
-puts
-puts "posting controllers into CouchDB"
-puts
-
-couch["controllers"].each do |k,v|
-  create_or_update("controller/#{k}", v)
-end
-
-puts
-puts "posting public docs into CouchDB"
-puts
-
-
-
-@content_types = {
-  "html"       => "text/html",
-  "htm"        => "text/html",
-  "png"        => "image/png",
-  "css"        => "text/css",
-  "js"         => "test/javascript"
-}
-
-def md5 string
-  Digest::MD5.hexdigest(string)
-end
-
-@attachments = {}
-@signatures = {}
-couch["public"].each do |doc|
-  @signatures[doc.keys.first] = md5(doc.values.first)
-  
-  @attachments[doc.keys.first] = {
-    "data" => doc.values.first,
-    "content_type" => @content_types[doc.keys.first.split('.').last]
-  }
-end
-
-doc = get("public")
-unless doc
-  puts "creating public"
-  @db.save({"_id" => "public", "_attachments" => @attachments, "signatures" => @signatures})
-  exit
-end
-
-puts doc.inspect
-
-doc["signatures"].each do |path, sig|
-  puts "existing"
-  puts "#{path}: #{sig}"
-  puts "new"
-  puts "#{path}: #{@signatures[path]}"
+if todo.include? "views"
+  puts "posting views into CouchDB"
+  couch["designs"].each do |k,v|
+    create_or_update("_design/#{k}", v)
+  end
   puts
-  if @signatures[path] == sig
-    puts "no change to #{path}. skipping..."
-  else
-    puts "replacing #{path}"
-    doc["signatures"][path] = md5(@attachments[path]["data"])
-    doc["_attachments"][path].delete("stub")
-    doc["_attachments"][path].delete("length")    
-    doc["_attachments"][path]["data"] = @attachments[path]["data"]
-    doc["_attachments"][path].merge!({"data" => @attachments[path]["data"]} )
-    puts doc.inspect
-    begin
-      @db.save(doc)
-    rescue Exception => e
-      puts e.message
+end
+
+if todo.include? "controllers"
+  puts "posting controllers into CouchDB"
+  couch["controllers"].each do |k,v|
+    create_or_update("controller/#{k}", v)
+  end
+  puts
+end
+
+
+if todo.include? "public"
+  puts "posting public docs into CouchDB"
+
+  puts "no docs in public"; exit if !couch["public"].empty?
+  
+  @content_types = {
+    "html"       => "text/html",
+    "htm"        => "text/html",
+    "png"        => "image/png",
+    "css"        => "text/css",
+    "js"         => "test/javascript"
+  }
+  
+  def md5 string
+    Digest::MD5.hexdigest(string)
+  end
+  
+  @attachments = {}
+  @signatures = {}
+  couch["public"].each do |doc|
+    @signatures[doc.keys.first] = md5(doc.values.first)
+    
+    @attachments[doc.keys.first] = {
+      "data" => doc.values.first,
+      "content_type" => @content_types[doc.keys.first.split('.').last]
+    }
+  end
+  
+  doc = get("public")
+  unless doc
+    puts "creating public"
+    @db.save({"_id" => "public", "_attachments" => @attachments, "signatures" => @signatures})
+    exit
+  end
+    
+  doc["signatures"].each do |path, sig|
+    if @signatures[path] == sig
+      puts "no change to #{path}. skipping..."
+    else
+      puts "replacing #{path}"
+      doc["signatures"][path] = md5(@attachments[path]["data"])
+      doc["_attachments"][path].delete("stub")
+      doc["_attachments"][path].delete("length")    
+      doc["_attachments"][path]["data"] = @attachments[path]["data"]
+      doc["_attachments"][path].merge!({"data" => @attachments[path]["data"]} )
+      begin
+        @db.save(doc)
+      rescue Exception => e
+        puts e.message
+      end
     end
   end
+  puts
 end
-# create_or_update("public", {"_attachments" => attachments, "signatures" => signatures})
