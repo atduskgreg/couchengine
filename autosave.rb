@@ -1,10 +1,10 @@
-dirname = ARGV[0]
-dbname = ARGV[1]
+dbname = ARGV[0]
 
-PROJECT_ROOT = "#{File.dirname(__FILE__)}/.." unless defined?(PROJECT_ROOT)
+PROJECT_ROOT = "#{File.expand_path(File.dirname(__FILE__))}/.." unless defined?(PROJECT_ROOT)
 
 begin
 
+  puts "beginning autosave"
   require 'osx/foundation'
   OSX.require_framework '/System/Library/Frameworks/CoreServices.framework/Frameworks/CarbonCore.framework'
 
@@ -14,9 +14,12 @@ begin
 
     numEvents.times { |i| rpaths << paths[i] }
 
-    if rpaths.any?{|p|/#{dirname}/.match(p)}
-      puts `script/couchdir #{dirname} #{dbname}`
+    ["public", "controllers", "views"].each do |dir|
+      if rpaths.any?{|p| Regexp.new(dir).match(p)}
+        puts `ruby #{PROJECT_ROOT}/script/file_manager.rb #{dir}`
+      end
     end
+    
   end
 
   allocator = OSX::KCFAllocatorDefault

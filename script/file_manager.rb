@@ -6,6 +6,7 @@ require 'digest/md5'
 todo = ARGV
 todo = ["views", "public", "controllers"] if ARGV.include? "all"
 
+
 PROJECT_ROOT = "#{File.dirname(__FILE__)}/.." unless defined?(PROJECT_ROOT)
 DBNAME = JSON.load( open("#{PROJECT_ROOT}/config.json").read )["db"]
 
@@ -62,6 +63,8 @@ end
 couch["designs"].each do |name, props|
   props["views"].delete("#{name}-reduce") unless props["views"]["#{name}-reduce"].keys.include?("reduce")
 end
+
+# puts couch.to_yaml
 
 # parsing done, begin posting
 
@@ -130,7 +133,9 @@ end
 if todo.include? "public"
   puts "posting public docs into CouchDB"
 
-  puts "no docs in public"; exit if !couch["public"].empty?
+  if couch["public"].empty?
+    puts "no docs in public"; exit 
+  end
   
   @content_types = {
     "html"       => "text/html",
@@ -143,7 +148,7 @@ if todo.include? "public"
   def md5 string
     Digest::MD5.hexdigest(string)
   end
-  
+    
   @attachments = {}
   @signatures = {}
   couch["public"].each do |doc|
@@ -156,14 +161,15 @@ if todo.include? "public"
   end
   
   doc = get("public")
+  
   unless doc
     puts "creating public"
     @db.save({"_id" => "public", "_attachments" => @attachments, "signatures" => @signatures})
     exit
   end
-    
+        
   doc["signatures"].each do |path, sig|
-    if @signatures[path] == sig
+    if (@signatures[path] == sig) && doc["signatures"].keys.include?(path)
       puts "no change to #{path}. skipping..."
     else
       puts "replacing #{path}"
@@ -179,5 +185,6 @@ if todo.include? "public"
       end
     end
   end
+  
   puts
 end
