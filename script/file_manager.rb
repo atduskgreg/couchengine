@@ -64,8 +64,6 @@ couch["designs"].each do |name, props|
   props["views"].delete("#{name}-reduce") unless props["views"]["#{name}-reduce"].keys.include?("reduce")
 end
 
-# puts couch.to_yaml
-
 # parsing done, begin posting
 
 # connect to couchdb
@@ -167,9 +165,19 @@ if todo.include? "public"
     @db.save({"_id" => "public", "_attachments" => @attachments, "signatures" => @signatures})
     exit
   end
-        
+  
+  # remove deleted docs
+  to_be_removed = doc["signatures"].keys.select{|d| !couch["public"].collect{|p| p.keys.first}.include?(d) }
+  
+  to_be_removed.each do |p|
+    puts "deleting #{p}"
+    doc["signatures"].delete(p)
+    doc["_attachments"].delete(p)
+  end
+  
+  # update existing docs:
   doc["signatures"].each do |path, sig|
-    if (@signatures[path] == sig) && doc["signatures"].keys.include?(path)
+    if (@signatures[path] == sig)
       puts "no change to #{path}. skipping..."
     else
       puts "replacing #{path}"
@@ -178,12 +186,29 @@ if todo.include? "public"
       doc["_attachments"][path].delete("length")    
       doc["_attachments"][path]["data"] = @attachments[path]["data"]
       doc["_attachments"][path].merge!({"data" => @attachments[path]["data"]} )
-      begin
-        @db.save(doc)
-      rescue Exception => e
-        puts e.message
-      end
+      
     end
+  end
+  
+  # add in new files
+  new_files = couch["public"].select{|d| !doc["signatures"].keys.include?( d.keys.first) } 
+  
+  new_files.each do |f|
+    puts "creating #{f}"
+    path = f.keys.first
+    content = f.values.first
+    doc["signatures"][path] = md5(content)
+    
+    doc["_attachments"][path] = {
+      "data" => content,
+      "content_type" => @content_types[path.split('.').last]
+    }
+  end
+  
+  begin
+    @db.save(doc)
+  rescue Exception => e
+    puts e.message
   end
   
   puts
